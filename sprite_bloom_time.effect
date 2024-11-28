@@ -1,0 +1,130 @@
+// Copyright (c) 2017-2020 Xiamen Yaji Software Co., Ltd.
+CCEffect %{
+  techniques:
+  - passes:
+    - vert: sprite-vs:vert
+      frag: sprite-fs:frag
+      depthStencilState:
+        depthTest: false
+        depthWrite: false
+      blendState:
+        targets:
+        - blend: true
+          blendSrc: src_alpha
+          blendDst: one_minus_src_alpha
+          blendDstAlpha: one_minus_src_alpha
+      rasterizerState:
+        cullMode: none
+      properties:
+        alphaThreshold: { value: 0.5 }
+        speed: { value: 1, editor: { slide: true, range: [0, 10.0], step: 0.001 } }
+        intensity: { value: 0.35, editor: { slide: true, range: [0, 10.0], step: 0.001 } }
+        
+}%
+
+CCProgram sprite-vs %{
+  precision highp float;
+  #include <builtin/uniforms/cc-global>
+  #if USE_LOCAL
+    #include <builtin/uniforms/cc-local>
+  #endif
+  #if SAMPLE_FROM_RT
+    #include <common/common-define>
+  #endif
+  in vec3 a_position;
+  in vec2 a_texCoord;
+  in vec4 a_color;
+
+  out vec4 color;
+  out vec2 uv0;
+
+  vec4 vert () {
+    vec4 pos = vec4(a_position, 1);
+
+    #if USE_LOCAL
+      pos = cc_matWorld * pos;
+    #endif
+
+    #if USE_PIXEL_ALIGNMENT
+      pos = cc_matView * pos;
+      pos.xyz = floor(pos.xyz);
+      pos = cc_matProj * pos;
+    #else
+      pos = cc_matViewProj * pos;
+    #endif
+
+    uv0 = a_texCoord;
+    #if SAMPLE_FROM_RT
+      CC_HANDLE_RT_SAMPLE_FLIP(uv0);
+    #endif
+    color = a_color;
+
+    return pos;
+  }
+}%
+
+CCProgram sprite-fs %{
+  precision highp float;
+  #include <builtin/uniforms/cc-global>
+  #if USE_LOCAL
+    #include <builtin/uniforms/cc-local>
+  #endif
+  #include <builtin/internal/embedded-alpha>
+  #include <builtin/internal/alpha-test>
+
+  in vec4 color;
+  in vec2 uv0;
+
+  uniform Constant {
+    float speed;
+    float intensity;
+  };
+
+  #pragma builtin(local)
+  layout(set = 2, binding = 12) uniform sampler2D cc_spriteTexture;
+
+  vec4 frag () {
+    vec4 o = vec4(1, 1, 1, 1);
+    o *= CCSampleWithAlphaSeparated(cc_spriteTexture, uv0);
+    
+    #if IS_GRAY
+      float gray  = 0.2126 * o.r + 0.7152 * o.g + 0.0722 * o.b;
+      o.r = o.g = o.b = gray;
+    #endif
+
+    o *= color;
+    
+    float blurSize = 1.0/512.0;
+    vec4 sum = vec4(0, 0, 0, 0);
+    // blur in y (vertical)
+    // take nine samples, with the distance blurSize between them
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x - 4.0*blurSize, uv0.y)) * 0.05;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x - 3.0*blurSize, uv0.y)) * 0.09;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x - 2.0*blurSize, uv0.y)) * 0.12;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x - blurSize, uv0.y)) * 0.15;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y)) * 0.16;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x + blurSize, uv0.y)) * 0.15;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x + 2.0*blurSize, uv0.y)) * 0.12;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x + 3.0*blurSize, uv0.y)) * 0.09;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x + 4.0*blurSize, uv0.y)) * 0.05;
+	
+    // blur in y (vertical)
+    // take nine samples, with the distance blurSize between them
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y - 4.0*blurSize)) * 0.05;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y - 3.0*blurSize)) * 0.09;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y - 2.0*blurSize)) * 0.12;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y - blurSize)) * 0.15;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y)) * 0.16;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y + blurSize)) * 0.15;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y + 2.0*blurSize)) * 0.12;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y + 3.0*blurSize)) * 0.09;
+    sum += CCSampleWithAlphaSeparated(cc_spriteTexture, vec2(uv0.x, uv0.y + 4.0*blurSize)) * 0.05;
+
+    //increase blur with intensity!
+    o = o + sum * intensity * abs(sin(cc_time.x * speed));
+    //o = sum * intensity;
+    
+    ALPHA_TEST(o);
+    return o;
+  }
+}%

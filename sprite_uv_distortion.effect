@@ -1,0 +1,128 @@
+CCEffect %{
+  techniques:
+  - passes:
+    - vert: sprite-vs:vert
+      frag: sprite-fs:frag
+      depthStencilState:
+        depthTest: false
+        depthWrite: false
+      blendState:
+        targets:
+        - blend: true
+          blendSrc: src_alpha
+          blendDst: one_minus_src_alpha
+          blendDstAlpha: one_minus_src_alpha
+      rasterizerState:
+        cullMode: none
+      properties:
+        alphaThreshold: { value: 0.5 }
+        maskTexture: { value: white }
+        normalTexture: { value: gray }
+        distortionSpeed: { value: 0.05, editor: { slide: true, range: [0, 1.0], step: 0.001 } }
+        distortionScale: { value: 0.5, editor: { slide: true, range: [0, 1.0], step: 0.001 } }
+        flameIntensity: { value: 0.04, editor: { slide: true, range: [0, 1.0], step: 0.001 } }
+        elapsedTime: { value: 1, editor: { slide: true, range: [1, 10], step: 0.001 } }
+}%
+
+CCProgram sprite-vs %{
+  precision highp float;
+  #include <builtin/uniforms/cc-global>
+  #if USE_LOCAL
+    #include <builtin/uniforms/cc-local>
+  #endif
+  #if SAMPLE_FROM_RT
+    #include <common/common-define>
+  #endif
+  in vec3 a_position;
+  in vec2 a_texCoord;
+  in vec4 a_color;
+
+  out vec4 color;
+  out vec2 uv0;
+
+  vec4 vert () {
+    vec4 pos = vec4(a_position, 1);
+
+    #if USE_LOCAL
+      pos = cc_matWorld * pos;
+    #endif
+
+    #if USE_PIXEL_ALIGNMENT
+      pos = cc_matView * pos;
+      pos.xyz = floor(pos.xyz);
+      pos = cc_matProj * pos;
+    #else
+      pos = cc_matViewProj * pos;
+    #endif
+
+    uv0 = a_texCoord;
+    #if SAMPLE_FROM_RT
+      CC_HANDLE_RT_SAMPLE_FLIP(uv0);
+    #endif
+    color = a_color;
+
+    return pos;
+  }
+}%
+
+CCProgram sprite-fs %{
+  precision highp float;
+  #include <builtin/internal/embedded-alpha>
+  #include <builtin/internal/alpha-test>
+
+  #include <builtin/uniforms/cc-global>
+
+  in vec4 color;  
+  in vec4 vertexPos;
+  uniform sampler2D maskTexture;
+  uniform sampler2D normalTexture;
+
+  uniform DistortionParameters {
+    float distortionSpeed;
+    float distortionScale;
+    float normalMapScale;
+    float edgeThickness;
+    float flameIntensity; 
+    float elapsedTime;
+  };
+
+  in vec2 uv0;
+  #pragma builtin(local)
+  layout(set = 2, binding = 12) uniform sampler2D cc_spriteTexture;
+
+  // Give random value function
+  float getRandom (vec2 st) {
+      return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+  }
+  vec2 getOriginalUV() {
+    return uv0;
+  }
+  vec4 getTextureVector(vec2 UV, sampler2D Texture) {
+	    return texture(Texture, UV);
+	}
+
+  vec4 frag () {
+    vec2 newUV = getOriginalUV();
+
+      // Calculate the distance from the UV coordinates to the nearest edge
+    float distFromEdge = min(min(newUV.x, 1.0 - newUV.x), min(newUV.y, 1.0 - newUV.y));
+
+    // Calculate the flame distortion amount based on the distance from the edge
+    float distortionAmount = flameIntensity * (1.0 - smoothstep(0.0, edgeThickness, distFromEdge));
+    //This the cc_time[0] variant
+    float randomOffset = sin(newUV.x * 10.0 + newUV.y + cc_time[0] * 20.0 * distortionSpeed) * distortionAmount;
+    //This is the elapsed time variant
+    // float randomOffset = sin(newUV.x * 10.0 + newUV.y + elapsedTime * 20.0 * distortionSpeed) * distortionAmount;
+
+    // Distort UV
+    newUV += vec2(0.0 , randomOffset);
+
+    vec4 newTexture = getTextureVector(newUV, cc_spriteTexture);
+
+    vec4 o = vec4(newTexture);
+
+    o *= color;
+    ALPHA_TEST(o);
+    return o;
+  }
+}%
